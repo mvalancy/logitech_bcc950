@@ -123,41 +123,78 @@ TOOL_DEFINITIONS = [
 
 
 def dispatch_tool_call(controller: BCC950Controller, name: str, args: dict) -> dict:
-    """Execute a tool call and return the result."""
+    """Execute a tool call and return the result.
+
+    Pan/tilt results include movement feedback: ``moved`` indicates whether the
+    camera actually shifted, and ``can_*`` flags report the current limit state.
+    """
+    pos = controller.position
+
     if name == "pan_camera":
         duration = float(args.get("duration", 0.3))
         if args["direction"] == "left":
-            controller.pan_left(duration)
+            moved = controller.pan_left(duration)
         else:
-            controller.pan_right(duration)
-        return {"status": "ok", "action": f"panned {args['direction']} for {duration}s"}
+            moved = controller.pan_right(duration)
+        return {
+            "status": "ok",
+            "action": f"panned {args['direction']} for {duration}s",
+            "moved": moved,
+            "at_limit": not moved,
+            "can_pan_left": pos.can_pan_left,
+            "can_pan_right": pos.can_pan_right,
+        }
 
     elif name == "tilt_camera":
         duration = float(args.get("duration", 0.3))
         if args["direction"] == "up":
-            controller.tilt_up(duration)
+            moved = controller.tilt_up(duration)
         else:
-            controller.tilt_down(duration)
-        return {"status": "ok", "action": f"tilted {args['direction']} for {duration}s"}
+            moved = controller.tilt_down(duration)
+        return {
+            "status": "ok",
+            "action": f"tilted {args['direction']} for {duration}s",
+            "moved": moved,
+            "at_limit": not moved,
+            "can_tilt_up": pos.can_tilt_up,
+            "can_tilt_down": pos.can_tilt_down,
+        }
 
     elif name == "set_zoom":
         controller.zoom_to(int(args["value"]))
         return {"status": "ok", "zoom": args["value"]}
 
     elif name == "move_camera":
-        controller.move(
+        pan_moved, tilt_moved = controller.move(
             int(args["pan_dir"]),
             int(args["tilt_dir"]),
             float(args.get("duration", 0.3)),
         )
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "pan_moved": pan_moved,
+            "tilt_moved": tilt_moved,
+            "can_pan_left": pos.can_pan_left,
+            "can_pan_right": pos.can_pan_right,
+            "can_tilt_up": pos.can_tilt_up,
+            "can_tilt_down": pos.can_tilt_down,
+        }
 
     elif name == "get_camera_status":
-        pos = controller.position
         return {
             "pan": pos.pan,
             "tilt": pos.tilt,
             "zoom": pos.zoom,
+            "can_pan_left": pos.can_pan_left,
+            "can_pan_right": pos.can_pan_right,
+            "can_tilt_up": pos.can_tilt_up,
+            "can_tilt_down": pos.can_tilt_down,
+            "limits": {
+                "pan_min": pos.pan_min,
+                "pan_max": pos.pan_max,
+                "tilt_min": pos.tilt_min,
+                "tilt_max": pos.tilt_max,
+            },
             "presets": controller.list_presets(),
         }
 

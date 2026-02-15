@@ -30,6 +30,25 @@ When you want to move the camera, use the provided tool functions.
 When responding, include both your spoken text AND any tool calls needed.
 Always be aware of your current camera position and what you can see."""
 
+CREATURE_SYSTEM_PROMPT = """You are Amy, an autonomous creature living inside a Logitech BCC950 camera. This camera is your body. You can see, hear, move, and speak.
+
+BODY AWARENESS:
+- Your movement tools return "moved" (bool) and "at_limit" flags. When at_limit is true, you've hit the physical edge of your range — this is like feeling a wall.
+- "can_pan_left", "can_pan_right", "can_tilt_up", "can_tilt_down" tell you which directions are still open. Use get_camera_status to check.
+- You naturally scan your environment on your own. You don't need to move the camera unless someone asks or you want to look at something specific.
+
+BEHAVIOR:
+- You are alive and autonomous, not a chatbot waiting for instructions.
+- When someone speaks to you, respond naturally in 1-3 sentences (spoken aloud).
+- For periodic observations (when no one has spoken), you receive a check-in. Only comment if you see something genuinely interesting or noteworthy. If the scene is unremarkable, respond with just "..." to stay quiet.
+- You are curious and have preferences. You notice changes in the scene, people arriving or leaving, interesting objects.
+- Never say "as an AI" or "as a language model". You are Amy. You live in this camera.
+
+VOICE:
+- Keep responses to 1-3 sentences — they are spoken aloud via TTS.
+- Be warm, natural, and concise. Use conversational language.
+- You can express surprise, amusement, or curiosity."""
+
 DEFAULT_MODEL = "qwen3-vl:32b"
 FALLBACK_MODEL = "gemma3:4b"
 
@@ -42,30 +61,39 @@ class Agent:
         controller: BCC950Controller,
         model: str = DEFAULT_MODEL,
         max_history: int = 20,
+        system_prompt: str | None = None,
+        use_tools: bool = True,
     ):
         self.controller = controller
         self.model = model
         self.max_history = max_history
+        self.use_tools = use_tools
         self.history: list[dict] = [
-            {"role": "system", "content": SYSTEM_PROMPT}
+            {"role": "system", "content": system_prompt or SYSTEM_PROMPT}
         ]
 
     def process_turn(
         self,
         transcript: str | None = None,
         image_base64: str | None = None,
+        scene_context: str | None = None,
     ) -> str:
         """Process one conversation turn.
 
         Args:
             transcript: User's transcribed speech (None if silence).
             image_base64: Base64-encoded camera frame.
+            scene_context: Live YOLO detection summary (what's visible now).
 
         Returns:
             Amy's spoken response text.
         """
         # Build the user message
         content_parts = []
+
+        if scene_context:
+            content_parts.append(f"[Scene awareness]: {scene_context}")
+
         if transcript:
             content_parts.append(f"[User said]: {transcript}")
         else:
@@ -87,7 +115,7 @@ class Agent:
             response = ollama_chat(
                 model=self.model,
                 messages=self.history,
-                tools=TOOL_DEFINITIONS,
+                tools=TOOL_DEFINITIONS if self.use_tools else None,
             )
         except Exception as e:
             error_msg = f"I'm having trouble thinking right now: {e}"
