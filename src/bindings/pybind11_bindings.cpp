@@ -30,11 +30,12 @@ PYBIND11_MODULE(_bcc950_native, m) {
         .def("reset", &bcc950::PositionTracker::reset)
         .def("distance_to", &bcc950::PositionTracker::distance_to);
 
-    // Controller - factory function since it takes unique_ptr
+    // Controller - factory function returning unique_ptr since Controller
+    // holds a unique_ptr member (non-copyable, non-movable in pybind11)
     m.def("create_controller", [](const std::string& device) {
         auto dev = std::make_unique<bcc950::V4L2Device>();
         dev->open(device);
-        return bcc950::Controller(std::move(dev));
+        return std::make_unique<bcc950::Controller>(std::move(dev));
     }, py::arg("device") = bcc950::DEFAULT_DEVICE);
 
     py::class_<bcc950::Controller>(m, "Controller")

@@ -16,8 +16,11 @@ add_library(libbcc950 STATIC
     src/controller.cpp
 )
 
-# Avoid the "liblibbcc950.a" name on Unix
-set_target_properties(libbcc950 PROPERTIES OUTPUT_NAME bcc950)
+# Avoid the "liblibbcc950.a" name on Unix; enable PIC for pybind11 linking
+set_target_properties(libbcc950 PROPERTIES
+    OUTPUT_NAME bcc950
+    POSITION_INDEPENDENT_CODE ON
+)
 
 target_include_directories(libbcc950
     PUBLIC
