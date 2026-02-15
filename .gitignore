@@ -55,12 +55,16 @@ htmlcov/
 # Config (user-specific)
 .bcc950_config
 
-# Models (downloaded by setup.sh, too large for git)
-models/piper/piper
-models/piper/*.onnx
-models/piper/*.onnx.json
-models/piper/lib*/
-models/piper/espeak-ng-data/
+# Models (downloaded, too large for git)
+models/
+
+# YOLO weights
+*.onnx
+*.pt
+!CMakeLists.txt
+
+# Runtime data
+demos/embodied/amy_memory.json
 
 # Reports
 report.html
