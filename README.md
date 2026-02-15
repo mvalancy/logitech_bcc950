@@ -2,22 +2,43 @@
 
 ![Logitech BCC950 Camera](https://github.com/user-attachments/assets/71319eb9-181c-4821-8d78-f85fe8dfcd5d)
 
-Control the Logitech BCC950 ConferenceCam's pan, tilt, and zoom functions via shell commands or Python in Linux.
+Control the Logitech BCC950 ConferenceCam's pan, tilt, and zoom functions via Python, C++, or shell commands on Linux.
 
 ## About the Logitech BCC950
 
 The Logitech BCC950 ConferenceCam is a versatile videoconferencing device that combines excellent video quality with motorized pan, tilt, and zoom capabilities. This unique combination makes it not just an ordinary webcam, but a fully controllable camera that can be programmatically directed to look around a room.
 
-### Key Features:
+### Key Features
 
-- **Full HD Video**: Delivers 1080p video quality at 30fps
-- **Motorized Pan/Tilt**: 180° pan and tilt capabilities, controllable via remote or software
-- **Digital Zoom**: Up to 4x zoom in SD (1.2x in HD) to focus on details
-- **Built-in Audio**: Full-duplex speakerphone with noise cancellation and wideband audio
-- **Omni-directional Microphone**: Clear audio pickup from up to 8 feet away
-- **Remote Control**: Included remote control for manual adjustments
-- **USB Plug-and-Play**: Simple connection to Linux, Windows, and macOS systems
-- **Programmable Controls**: API access to pan, tilt, and zoom functions
+- **Full HD Video**: 1080p at 30fps
+- **Motorized Pan/Tilt**: 180° pan and tilt, controllable via software
+- **Digital Zoom**: Up to 4x zoom (1.2x in HD)
+- **Built-in Audio**: Full-duplex speakerphone with noise cancellation
+- **USB Plug-and-Play**: Linux, Windows, macOS
+- **Programmable Controls**: Full API access to PTZ functions
+
+## Project Structure
+
+```
+logitech_bcc950/
+├── src/
+│   ├── cpp/                    # C++ driver (direct V4L2 ioctl)
+│   │   ├── include/bcc950/     # Headers
+│   │   ├── src/                # Implementation
+│   │   └── tests/              # Google Test suite
+│   ├── python/                 # Python package
+│   │   ├── bcc950/             # Library modules
+│   │   └── tests/              # pytest suite (unit/integration/vision)
+│   └── bindings/               # pybind11 native backend (55x faster)
+├── demos/
+│   ├── basic_embodied.py       # Simple see/hear/think/speak AI demo
+│   ├── vision/                 # OpenCV-based demos (tracker, calibration)
+│   └── voice/                  # Whisper STT / Piper TTS demos
+├── samples/                    # Quick-start scripts (PTZ, video stream)
+├── scripts/                    # Setup scripts, hardware verify
+├── docs/                       # Architecture, vision testing, future plans
+└── CMakeLists.txt              # Top-level build (C++ + optional pybind11)
+```
 
 ## System Architecture
 
@@ -25,198 +46,215 @@ The Logitech BCC950 ConferenceCam is a versatile videoconferencing device that c
 flowchart TD
     A[Logitech BCC950 Camera] --- USB
     USB --- PC[Computer]
-    B[v4l2-utils] --> C["Device Driver"]
-    C --- A
-    D[Shell Script] --> |commands| B
-    E[Python Script] --> |commands| B
-    F[Manual Control] --> D
-    F --> E
-    G[Demo Sequence] --> D
-    G --> E
-    H[Embodied AI] --> E
-    I[Video Conferencing] --> A
+
+    subgraph Backends
+        N[C++ Native Driver<br>direct V4L2 ioctl]
+        S[Subprocess Backend<br>v4l2-ctl wrapper]
+    end
+
+    subgraph "Python Package"
+        P[BCC950Controller]
+        M[MotionController]
+        POS[PositionTracker]
+        PR[PresetManager]
+        P --> M
+        P --> POS
+        P --> PR
+    end
+
+    subgraph "C++ Library"
+        CC[Controller]
+        CM[MotionController]
+        CV[V4L2Device]
+        CC --> CM
+        CM --> CV
+    end
+
+    P --> N
+    P --> S
+    S --> B[v4l2-ctl]
+    B --> A
+    N --> A
+    CV --> A
+
+    D[Shell Script] --> B
+    CLI[Python CLI / C++ CLI] --> P
+    CLI --> CC
+    DEMO[Demos] --> P
 ```
 
-## Camera Movement Controls
+## Quick Start
 
-```mermaid
-flowchart LR
-    PL[--pan-left] --> |pan_speed=-1| PS[Pan Speed]
-    PR[--pan-right] --> |pan_speed=1| PS
-    TU[--tilt-up] --> |tilt_speed=1| TS[Tilt Speed]
-    TD[--tilt-down] --> |tilt_speed=-1| TS
-    ZI[--zoom-in] --> |zoom_absolute=+step| ZA[Zoom Absolute]
-    ZO[--zoom-out] --> |zoom_absolute=-step| ZA
-    PS --> V[v4l2 Driver]
-    TS --> V
-    ZA --> V
-    V --> CAM[BCC950 Camera]
-```
-
-## Installation & Setup
-
-### Prerequisites
-
-- Linux operating system
-- v4l2-utils package (automatically installed by setup)
-- Python 3.6+ (for Python script)
-
-### Getting Started
+### Automated Setup (Recommended)
 
 ```bash
-# Clone this repository
-git clone https://github.com/yourusername/logitech-bcc950-control.git
-cd logitech-bcc950-control
+# One command sets up everything: packages, venv, AI models, hardware test
+./scripts/setup.sh
+source .venv/bin/activate
 
-# Make the scripts executable
-chmod +x bcc950-control.sh
-chmod +x bcc950_control.py
+# Verify hardware works (camera physically moves)
+python scripts/verify_hardware.py
 
-# Run setup (either script works)
-./bcc950-control.sh --setup
-# OR
-./bcc950_control.py --setup
+# Generate visual HTML report
+python scripts/generate_report.py
 ```
 
-## Using the Shell Script
-
-The shell script provides a simple command-line interface to control the camera:
+### Python CLI
 
 ```bash
-# Pan the camera left
-./bcc950-control.sh --pan-left
+source .venv/bin/activate
 
-# Tilt the camera up
-./bcc950-control.sh --tilt-up
+# Control the camera
+bcc950 --pan-left
+bcc950 --tilt-up --duration 0.5
+bcc950 --zoom-value 300
+bcc950 --move -1 1 1.0    # pan left + tilt up for 1 second
 
-# Zoom in
-./bcc950-control.sh --zoom-in
-
-# Run a demo sequence
-./bcc950-control.sh --demo
+# Presets
+bcc950 --save-preset "desk"
+bcc950 --recall-preset "desk"
+bcc950 --list-presets
 ```
 
-## Using the Python Script
-
-The Python script offers the same functionality with an object-oriented approach:
-
-```bash
-# Pan the camera left
-./bcc950_control.py --pan-left
-
-# Tilt the camera up
-./bcc950_control.py --tilt-up
-
-# Zoom in
-./bcc950_control.py --zoom-in
-
-# Run a demo sequence
-./bcc950_control.py --demo
-```
-
-The Python script can also be imported into other Python applications:
+### Python API
 
 ```python
-from bcc950_control import BCC950Controller
+from bcc950 import BCC950Controller
 
-# Create controller instance
 camera = BCC950Controller()
 
-# Control camera
-camera.pan_left()
-camera.tilt_up()
-camera.zoom_in()
-camera.run_demo()
+# Basic controls
+camera.pan_left(duration=0.5)
+camera.tilt_up(duration=0.3)
+camera.zoom_to(300)
+
+# Combined movement
+camera.move(pan_dir=-1, tilt_dir=1, duration=1.0)
+
+# Presets
+camera.save_preset("meeting_view")
+camera.recall_preset("meeting_view")
+
+# Position tracking
+print(camera.position)  # estimated pan/tilt/zoom
 ```
 
-## Command Options
+### C++ Build
 
-Both scripts support the following options:
+```bash
+cd src/cpp
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
 
-- `--setup`: Install prerequisites and detect camera
-- `--device DEVICE`: Specify camera device (default: auto-detected)
-- `--list`: List available camera devices
-- `--pan-left`: Pan camera left
-- `--pan-right`: Pan camera right
-- `--tilt-up`: Tilt camera up
-- `--tilt-down`: Tilt camera down
-- `--zoom-in`: Zoom camera in
-- `--zoom-out`: Zoom camera out
-- `--reset`: Reset camera to default position
-- `--demo`: Run a demonstration sequence of camera movements
-- `--info`: Show camera information and controls
-- `--help`: Show help message
+# Run CLI
+./bcc950 --pan-left --duration 0.5
 
-## Demo Sequence Flow
-
-```mermaid
-sequenceDiagram
-    participant Script
-    participant Camera
-    
-    Script->>Camera: Reset zoom to minimum
-    Script->>Camera: Pan left
-    loop Zoom In
-        Script->>Camera: Increase zoom
-    end
-    Script->>Camera: Stop panning
-    Script->>Camera: Tilt up
-    Script->>Camera: Stop tilting
-    Script->>Camera: Pan right
-    loop Zoom Out
-        Script->>Camera: Decrease zoom
-    end
-    Script->>Camera: Stop panning
-    Script->>Camera: Tilt down
-    Script->>Camera: Reset position
+# Run tests
+ctest -v
 ```
 
-## Creating Embodied AI with the BCC950
+### Shell Script
 
-The Logitech BCC950 is an excellent platform for creating embodied AI experiences. By combining its mechanical movement with AI capabilities, you can create an interactive presence that feels much more engaging than traditional voice assistants.
-
-### Why It's Perfect for Embodied AI:
-
-1. **Physical Movement**: The pan/tilt capabilities allow your AI to respond physically - turning to face someone when they speak, nodding in agreement, or looking around the room.
-
-2. **Integrated Audio**: The built-in speakerphone and microphone mean your AI can hear and respond without additional hardware.
-
-3. **Strong Presence**: The camera's eye-level positioning and motorized movement create a sense of presence that static webcams can't match.
-
-4. **Programmable Control**: These scripts provide a foundation for integrating the camera's movement with AI systems.
-
-### AI Integration Architecture
-
-```mermaid
-flowchart TD
-    A[Speech Recognition] --> C[AI Core Logic]
-    B[Computer Vision] --> C
-    C --> D[Speech Synthesis]
-    C --> E[Movement Control]
-    E --> F[BCC950Controller]
-    F --> G[v4l2 Interface]
-    G --> H[BCC950 Camera]
-    I[Human] --> A
-    D --> I
-    H --> I
+```bash
+./scripts/bcc950_control.sh --pan-left
+./scripts/bcc950_control.sh --zoom-in
+./scripts/bcc950_control.sh --demo
 ```
 
-### Integration Ideas:
+## Testing
 
-- **Voice Assistant Enhancement**: Connect with systems like ChatGPT, Rasa, or other conversational AI platforms and add physical responses.
-  
-- **Meeting Attendee**: Create an AI participant for meetings that can turn to face the active speaker.
-  
-- **Smart Home Hub**: Use as a central interface for your smart home, with the ability to look toward activity in different parts of a room.
-  
-- **Security Monitor**: Combine with computer vision to create a security system that can actively track motion.
-  
-- **Telepresence**: Enable remote workers to have better presence in meetings with automated tracking and movement.
+```bash
+# Python unit tests (no hardware needed)
+cd src/python
+pip install -e ".[test]"
+pytest -v
+
+# Integration tests (requires camera)
+pytest --run-hardware --device /dev/video0 -v
+
+# Vision verification tests (requires camera + OpenCV)
+pip install -e ".[test,vision]"
+pytest --run-hardware --run-vision --device /dev/video0 -v
+
+# C++ unit tests (no hardware needed)
+cd src/cpp/build
+cmake .. && make -j && ctest -v
+```
+
+### Vision Test Methodology
+
+The vision tests use computer vision to verify camera movements:
+
+| Test | Algorithm | Pass Criteria |
+|------|-----------|---------------|
+| Pan L/R | Lucas-Kanade sparse flow | median dx > 3px, 70% directional consistency |
+| Tilt U/D | Lucas-Kanade sparse flow | median dy > 3px, 70% directional consistency |
+| Zoom in | ORB feature distance ratio | ratio > 1.05 |
+| Zoom out | ORB feature distance ratio | ratio < 0.95 |
+| Any move | Frame differencing | mean pixel diff > 5.0 |
+
+See [docs/vision_testing.md](docs/vision_testing.md) for details.
+
+## Demos
+
+### Basic Embodied AI
+
+A simple see/hear/think/speak loop — BCC950 camera + YOLO tracking + Whisper STT + Piper TTS:
+
+```bash
+source .venv/bin/activate
+python demos/basic_embodied.py
+python demos/basic_embodied.py --no-tts --no-tracking --whisper-model base
+```
+
+For the **full AI Commander** (autonomous consciousness with sensorium, thinking thread,
+persistent memory, and multi-sensor fusion), see [TRITIUM-SC](https://github.com/mvalancy/tritium-sc).
+
+### Vision Demos
+
+```bash
+source .venv/bin/activate
+
+# Track moving objects automatically
+python demos/vision/motion_tracker.py
+
+# Interactive movement verifier with optical flow overlay
+python demos/vision/movement_verifier.py
+
+# Calibrate position estimation with ArUco markers
+python demos/vision/calibration.py
+```
+
+### Voice Demos
+
+```bash
+source .venv/bin/activate
+
+# Voice-controlled camera
+python demos/voice/voice_control.py
+
+# AI-narrated camera (Ollama vision)
+python demos/voice/narrator.py --use-ollama
+
+# Classic narrator (Haar cascades, no AI needed)
+python demos/voice/narrator.py
+```
+
+See [demos/README.md](demos/README.md) for detailed setup and [docs/usage_scenarios.md](docs/usage_scenarios.md) for comprehensive guides.
+
+## Documentation
+
+- [Setup Guide](docs/setup_guide.md) - Complete installation and configuration guide
+- [Usage Scenarios](docs/usage_scenarios.md) - Detailed guides for each usage mode
+- [Architecture](docs/architecture.md) - Component design, data flow, backend selection
+- [Vision Testing](docs/vision_testing.md) - CV methodology, thresholds, interpretation
+- [LLM Integration](docs/lua_llm_integration.md) - Lua bindings + LLM tool-use schema
 
 ## Contributing
 
-Contributions are welcome! Feel free to submit pull requests or create issues for bugs and feature requests.
+Contributions are welcome! Feel free to submit pull requests or create issues.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License - see [LICENSE](LICENSE) for details.
