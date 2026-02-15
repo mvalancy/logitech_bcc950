@@ -4,8 +4,6 @@ import pytest
 
 from bcc950.position import PositionTracker
 from bcc950.constants import (
-    EST_PAN_RANGE,
-    EST_TILT_RANGE,
     ZOOM_DEFAULT,
     ZOOM_MAX,
     ZOOM_MIN,
@@ -51,41 +49,75 @@ class TestAccumulation:
 
 
 # ---------------------------------------------------------------------------
-# Clamping at range limits
+# Dynamic limit discovery
 # ---------------------------------------------------------------------------
 
-class TestClamping:
-    def test_pan_clamps_at_max(self):
+class TestLimitDiscovery:
+    def test_no_limits_by_default(self):
         pos = PositionTracker()
-        pos.update_pan(1, 100.0)  # Way beyond range
-        assert pos.pan == pytest.approx(EST_PAN_RANGE[1])
+        assert pos.pan_min is None
+        assert pos.pan_max is None
+        assert pos.tilt_min is None
+        assert pos.tilt_max is None
 
-    def test_pan_clamps_at_min(self):
+    def test_can_move_all_directions_when_no_limits(self):
         pos = PositionTracker()
-        pos.update_pan(-1, 100.0)
-        assert pos.pan == pytest.approx(EST_PAN_RANGE[0])
+        assert pos.can_pan_left is True
+        assert pos.can_pan_right is True
+        assert pos.can_tilt_up is True
+        assert pos.can_tilt_down is True
 
-    def test_tilt_clamps_at_max(self):
+    def test_pan_right_limit_discovered(self):
         pos = PositionTracker()
-        pos.update_tilt(1, 100.0)
-        assert pos.tilt == pytest.approx(EST_TILT_RANGE[1])
+        pos.update_pan(1, 0.3, moved=True)
+        pos.update_pan(1, 0.3, moved=True)
+        pos.update_pan(1, 0.3, moved=False)  # hit right limit
+        assert pos.pan_max == pytest.approx(0.6)
+        assert pos.can_pan_right is False
+        assert pos.can_pan_left is True
 
-    def test_tilt_clamps_at_min(self):
+    def test_pan_left_limit_discovered(self):
         pos = PositionTracker()
-        pos.update_tilt(-1, 100.0)
-        assert pos.tilt == pytest.approx(EST_TILT_RANGE[0])
+        pos.update_pan(-1, 0.3, moved=True)
+        pos.update_pan(-1, 0.3, moved=False)  # hit left limit
+        assert pos.pan_min == pytest.approx(-0.3)
+        assert pos.can_pan_left is False
+        assert pos.can_pan_right is True
 
-    def test_pan_stays_clamped_after_further_movement(self):
+    def test_tilt_up_limit_discovered(self):
         pos = PositionTracker()
-        pos.update_pan(1, 100.0)
-        pos.update_pan(1, 1.0)
-        assert pos.pan == pytest.approx(EST_PAN_RANGE[1])
+        pos.update_tilt(1, 0.5, moved=True)
+        pos.update_tilt(1, 0.5, moved=False)  # hit upper limit
+        assert pos.tilt_max == pytest.approx(0.5)
+        assert pos.can_tilt_up is False
+        assert pos.can_tilt_down is True
 
-    def test_tilt_stays_clamped_after_further_movement(self):
+    def test_tilt_down_limit_discovered(self):
         pos = PositionTracker()
-        pos.update_tilt(1, 100.0)
-        pos.update_tilt(1, 1.0)
-        assert pos.tilt == pytest.approx(EST_TILT_RANGE[1])
+        pos.update_tilt(-1, 0.4, moved=True)
+        pos.update_tilt(-1, 0.4, moved=False)  # hit lower limit
+        assert pos.tilt_min == pytest.approx(-0.4)
+        assert pos.can_tilt_down is False
+        assert pos.can_tilt_up is True
+
+    def test_position_unchanged_when_not_moved(self):
+        pos = PositionTracker()
+        pos.update_pan(1, 0.3, moved=True)
+        assert pos.pan == pytest.approx(0.3)
+        pos.update_pan(1, 0.3, moved=False)
+        assert pos.pan == pytest.approx(0.3)  # unchanged
+
+    def test_clear_limits(self):
+        pos = PositionTracker()
+        pos.update_pan(1, 0.3, moved=False)
+        pos.update_tilt(1, 0.3, moved=False)
+        pos.clear_limits()
+        assert pos.pan_min is None
+        assert pos.pan_max is None
+        assert pos.tilt_min is None
+        assert pos.tilt_max is None
+        assert pos.can_pan_right is True
+        assert pos.can_tilt_up is True
 
 
 # ---------------------------------------------------------------------------

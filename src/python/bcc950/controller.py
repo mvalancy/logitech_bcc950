@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .config import Config
 from .constants import (
@@ -20,12 +21,18 @@ from .position import PositionTracker
 from .presets import PresetManager
 from .v4l2_backend import SubprocessV4L2Backend, V4L2Backend
 
+if TYPE_CHECKING:
+    import cv2
+
 
 class BCC950Controller:
     """High-level controller for the Logitech BCC950 camera.
 
     Backward-compatible API (pan_left(), tilt_up(), etc.) plus new
     methods (move(), zoom_to(), save_preset(), recall_preset()).
+
+    Call :meth:`attach_video` with an open ``cv2.VideoCapture`` to
+    enable automatic motion verification and limit discovery.
     """
 
     def __init__(
@@ -43,6 +50,29 @@ class BCC950Controller:
         self._position = PositionTracker()
         self._motion = MotionController(self._backend, self._device, self._position)
         self._presets = PresetManager(presets_path)
+
+    # --- Video / motion verification ---
+
+    def attach_video(self, cap: cv2.VideoCapture) -> None:
+        """Attach a video capture for automatic motion verification.
+
+        Once attached, every pan/tilt command compares frames before
+        and after the move.  If the camera didn't shift, the current
+        position is recorded as a mechanical limit.  Use
+        ``position.can_pan_left`` etc. to query discovered limits.
+        """
+        from .motion_verify import MotionVerifier
+
+        self._motion.verifier = MotionVerifier(cap)
+
+    def detach_video(self) -> None:
+        """Detach video capture; moves will no longer be verified."""
+        self._motion.verifier = None
+
+    @property
+    def has_verifier(self) -> bool:
+        """True if a motion verifier is attached."""
+        return self._motion.verifier is not None
 
     @property
     def device(self) -> str:
@@ -63,21 +93,21 @@ class BCC950Controller:
 
     # --- Backward-compatible API ---
 
-    def pan_left(self, duration: float = DEFAULT_MOVE_DURATION) -> None:
-        """Pan camera left."""
-        self._motion.pan(-self._config.pan_speed, duration)
+    def pan_left(self, duration: float = DEFAULT_MOVE_DURATION) -> bool:
+        """Pan camera left. Returns True if the camera moved."""
+        return self._motion.pan(-self._config.pan_speed, duration)
 
-    def pan_right(self, duration: float = DEFAULT_MOVE_DURATION) -> None:
-        """Pan camera right."""
-        self._motion.pan(self._config.pan_speed, duration)
+    def pan_right(self, duration: float = DEFAULT_MOVE_DURATION) -> bool:
+        """Pan camera right. Returns True if the camera moved."""
+        return self._motion.pan(self._config.pan_speed, duration)
 
-    def tilt_up(self, duration: float = DEFAULT_MOVE_DURATION) -> None:
-        """Tilt camera up."""
-        self._motion.tilt(self._config.tilt_speed, duration)
+    def tilt_up(self, duration: float = DEFAULT_MOVE_DURATION) -> bool:
+        """Tilt camera up. Returns True if the camera moved."""
+        return self._motion.tilt(self._config.tilt_speed, duration)
 
-    def tilt_down(self, duration: float = DEFAULT_MOVE_DURATION) -> None:
-        """Tilt camera down."""
-        self._motion.tilt(-self._config.tilt_speed, duration)
+    def tilt_down(self, duration: float = DEFAULT_MOVE_DURATION) -> bool:
+        """Tilt camera down. Returns True if the camera moved."""
+        return self._motion.tilt(-self._config.tilt_speed, duration)
 
     def zoom_in(self) -> None:
         """Zoom camera in by one step."""
@@ -103,9 +133,9 @@ class BCC950Controller:
         pan_dir: int = 0,
         tilt_dir: int = 0,
         duration: float = DEFAULT_MOVE_DURATION,
-    ) -> None:
-        """Combined pan+tilt move with configurable duration."""
-        self._motion.combined_move(pan_dir, tilt_dir, duration)
+    ) -> tuple[bool, bool]:
+        """Combined pan+tilt move. Returns (pan_moved, tilt_moved)."""
+        return self._motion.combined_move(pan_dir, tilt_dir, duration)
 
     def zoom_to(self, value: int) -> None:
         """Set zoom to an absolute value."""
@@ -117,9 +147,9 @@ class BCC950Controller:
         tilt_dir: int = 0,
         zoom_target: int = ZOOM_MIN,
         duration: float = DEFAULT_MOVE_DURATION,
-    ) -> None:
-        """Combined pan + tilt + zoom."""
-        self._motion.combined_move_with_zoom(pan_dir, tilt_dir, zoom_target, duration)
+    ) -> tuple[bool, bool]:
+        """Combined pan + tilt + zoom. Returns (pan_moved, tilt_moved)."""
+        return self._motion.combined_move_with_zoom(pan_dir, tilt_dir, zoom_target, duration)
 
     def save_preset(self, name: str) -> None:
         """Save current position as a named preset."""
