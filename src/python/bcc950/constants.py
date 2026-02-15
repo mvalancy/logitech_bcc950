@@ -24,10 +24,6 @@ CTRL_PAN_SPEED = "pan_speed"
 CTRL_TILT_SPEED = "tilt_speed"
 CTRL_ZOOM_ABSOLUTE = "zoom_absolute"
 
-# Estimated position range (movement-seconds based)
-EST_PAN_RANGE = (-5.0, 5.0)
-EST_TILT_RANGE = (-3.0, 3.0)
-
 # Config file
 DEFAULT_CONFIG_FILENAME = ".bcc950_config"
 DEFAULT_PRESETS_FILENAME = ".bcc950_presets.json"
