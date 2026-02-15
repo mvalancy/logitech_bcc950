@@ -22,6 +22,9 @@ def camera_capture(request):
     if not cap.isOpened():
         pytest.skip(f"Cannot open video device {device}")
 
+    # Minimize internal frame buffer so reads return current frames
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
     # Discard warmup frames to let auto-exposure settle
     for _ in range(WARMUP_FRAMES):
         cap.read()

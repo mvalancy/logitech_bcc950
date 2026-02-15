@@ -59,6 +59,32 @@ class FrameCapture:
         return False
 
 
+def flush_buffer(cap, n=5):
+    """Grab and discard *n* frames to flush OpenCV's internal buffer.
+
+    V4L2 VideoCapture keeps a small queue of decoded frames.  After a
+    camera movement we need to drain them so the next ``read()``
+    returns a truly *current* frame.
+    """
+    for _ in range(n):
+        cap.grab()
+
+
+def compute_phase_shift(prev_gray, curr_gray):
+    """Measure horizontal and vertical shift via phase correlation.
+
+    Uses ``cv2.phaseCorrelate`` on the full frame which is robust to
+    lighting changes and handles large sub-pixel displacements.
+
+    Returns (dx, dy) where positive dx means the content moved RIGHT
+    in *curr_gray* relative to *prev_gray* (camera panned LEFT).
+    """
+    prev_f = np.float64(prev_gray)
+    curr_f = np.float64(curr_gray)
+    (dx, dy), response = cv2.phaseCorrelate(prev_f, curr_f)
+    return float(dx), float(dy), float(response)
+
+
 def compute_sparse_flow(prev_gray, curr_gray):
     """Compute sparse optical flow using Lucas-Kanade on Shi-Tomasi corners.
 
@@ -132,64 +158,39 @@ def compute_frame_difference(frame1, frame2):
 
 
 def estimate_fov_change(prev_gray, curr_gray):
-    """Estimate field-of-view change using ORB feature matching.
+    """Estimate field-of-view change using multi-scale template matching.
 
-    Computes the ratio of mean inter-feature distances between matched
-    keypoints in the current frame vs the previous frame. A ratio > 1
-    indicates features have spread apart (zoom in), < 1 indicates they
-    have come closer (zoom out).
+    Crops a template from the centre of *prev_gray* and searches for it
+    in *curr_gray* at multiple scales.  The scale with the best match
+    indicates how much the FOV changed.  A ratio > 1.0 means the
+    template appears larger in *curr_gray* (zoom in), < 1.0 means
+    smaller (zoom out).
 
-    Parameters
-    ----------
-    prev_gray : numpy.ndarray
-        Previous frame in grayscale.
-    curr_gray : numpy.ndarray
-        Current frame in grayscale.
-
-    Returns
-    -------
-    float
-        Ratio of mean inter-feature distance (curr / prev).
-        Returns 1.0 if insufficient matches are found.
+    Returns 1.0 if no reliable match is found.
     """
-    orb = cv2.ORB_create(nfeatures=500)
+    h, w = prev_gray.shape[:2]
+    # Use central 20% of frame as template
+    th, tw = h // 5, w // 5
+    y0, x0 = h // 2 - th // 2, w // 2 - tw // 2
+    template = prev_gray[y0:y0 + th, x0:x0 + tw]
 
-    kp1, des1 = orb.detectAndCompute(prev_gray, None)
-    kp2, des2 = orb.detectAndCompute(curr_gray, None)
+    best_val = -1.0
+    best_scale = 1.0
 
-    if des1 is None or des2 is None or len(des1) < 4 or len(des2) < 4:
+    for scale_pct in range(30, 200, 3):
+        scale = scale_pct / 100.0
+        new_w = int(tw * scale)
+        new_h = int(th * scale)
+        if new_w >= w or new_h >= h or new_w < 10 or new_h < 10:
+            continue
+        resized = cv2.resize(template, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        result = cv2.matchTemplate(curr_gray, resized, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+        if max_val > best_val:
+            best_val = max_val
+            best_scale = scale
+
+    if best_val < 0.3:
         return 1.0
 
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(des1, des2)
-
-    if len(matches) < 4:
-        return 1.0
-
-    # Sort by distance (best matches first) and take top matches
-    matches = sorted(matches, key=lambda m: m.distance)
-    top_n = min(50, len(matches))
-    matches = matches[:top_n]
-
-    # Extract matched keypoint coordinates
-    pts1 = np.array([kp1[m.queryIdx].pt for m in matches])
-    pts2 = np.array([kp2[m.trainIdx].pt for m in matches])
-
-    # Compute mean pairwise inter-feature distance for each set
-    def mean_inter_distance(pts):
-        if len(pts) < 2:
-            return 1.0
-        dists = []
-        for i in range(len(pts)):
-            for j in range(i + 1, len(pts)):
-                d = np.linalg.norm(pts[i] - pts[j])
-                dists.append(d)
-        return float(np.mean(dists)) if dists else 1.0
-
-    dist_prev = mean_inter_distance(pts1)
-    dist_curr = mean_inter_distance(pts2)
-
-    if dist_prev == 0:
-        return 1.0
-
-    return dist_curr / dist_prev
+    return best_scale
