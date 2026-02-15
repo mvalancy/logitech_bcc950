@@ -1,0 +1,70 @@
+# C++ build artifacts
+build/
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.lib
+*.exe
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.cmake
+!CMakeLists.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+*.whl
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.cproject
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Config (user-specific)
+.bcc950_config
+
+# Models (downloaded by setup.sh, too large for git)
+models/piper/piper
+models/piper/*.onnx
+models/piper/*.onnx.json
+models/piper/lib*/
+models/piper/espeak-ng-data/
+
+# Reports
+report.html
+reports/
+
+# Calibration data
+calibration.json

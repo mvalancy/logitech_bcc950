@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bcc950"
+version = "1.0.0"
+description = "Logitech BCC950 camera PTZ control library"
+readme = {text = "Logitech BCC950 camera PTZ control library", content-type = "text/plain"}
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Matthew Valancy" },
+]
+
+[project.scripts]
+bcc950 = "bcc950.cli:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-timeout>=2.0",
+]
+vision = [
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+]
+voice = [
+    "openai-whisper",
+    "piper-tts",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "hardware: requires physical camera hardware",
+    "vision: requires OpenCV and camera hardware",
+    "slow: marks tests as slow",
+]
+addopts = "-m 'not hardware and not vision'"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bcc950*"]
