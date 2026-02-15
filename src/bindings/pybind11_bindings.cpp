@@ -1,6 +1,15 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <memory>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <linux/videodev2.h>
 
 #include "bcc950/v4l2_device.hpp"
 #include "bcc950/controller.hpp"
@@ -9,17 +18,131 @@
 
 namespace py = pybind11;
 
+// Map Python control names (matching v4l2-ctl naming) to V4L2 CID values.
+static const std::unordered_map<std::string, uint32_t> CONTROL_MAP = {
+    {"pan_speed",      V4L2_CID_PAN_SPEED},
+    {"tilt_speed",     V4L2_CID_TILT_SPEED},
+    {"zoom_absolute",  V4L2_CID_ZOOM_ABSOLUTE},
+    {"pan_absolute",   V4L2_CID_PAN_ABSOLUTE},
+    {"tilt_absolute",  V4L2_CID_TILT_ABSOLUTE},
+    {"zoom_relative",  V4L2_CID_ZOOM_RELATIVE},
+    {"pan_relative",   V4L2_CID_PAN_RELATIVE},
+    {"tilt_relative",  V4L2_CID_TILT_RELATIVE},
+    {"brightness",     V4L2_CID_BRIGHTNESS},
+    {"contrast",       V4L2_CID_CONTRAST},
+    {"saturation",     V4L2_CID_SATURATION},
+    {"sharpness",      V4L2_CID_SHARPNESS},
+    {"focus_auto",     V4L2_CID_FOCUS_AUTO},
+    {"focus_absolute", V4L2_CID_FOCUS_ABSOLUTE},
+};
+
+static uint32_t resolve_control(const std::string& name) {
+    auto it = CONTROL_MAP.find(name);
+    if (it != CONTROL_MAP.end()) {
+        return it->second;
+    }
+    throw py::value_error("Unknown control name: '" + name +
+                          "'. Use a V4L2 control name like 'pan_speed', "
+                          "'tilt_speed', 'zoom_absolute'.");
+}
+
+// Enumerate V4L2 controls on an open device fd.
+static std::string enumerate_controls(bcc950::V4L2Device& dev) {
+    if (!dev.is_open()) {
+        throw bcc950::V4L2Error("Device not open");
+    }
+    int fd = dev.fd();
+    std::ostringstream out;
+    struct v4l2_queryctrl qctrl{};
+    qctrl.id = V4L2_CTRL_FLAG_NEXT_CTRL;
+    while (::ioctl(fd, VIDIOC_QUERYCTRL, &qctrl) == 0) {
+        if (!(qctrl.flags & V4L2_CTRL_FLAG_DISABLED)) {
+            out << reinterpret_cast<const char*>(qctrl.name)
+                << " 0x" << std::hex << qctrl.id << std::dec
+                << " (";
+            switch (qctrl.type) {
+                case V4L2_CTRL_TYPE_INTEGER: out << "int"; break;
+                case V4L2_CTRL_TYPE_BOOLEAN: out << "bool"; break;
+                case V4L2_CTRL_TYPE_MENU:    out << "menu"; break;
+                default:                     out << "type=" << qctrl.type; break;
+            }
+            out << "): min=" << qctrl.minimum
+                << " max=" << qctrl.maximum
+                << " step=" << qctrl.step
+                << " default=" << qctrl.default_value;
+            // Read current value
+            struct v4l2_control ctrl{};
+            ctrl.id = qctrl.id;
+            if (::ioctl(fd, VIDIOC_G_CTRL, &ctrl) == 0) {
+                out << " value=" << ctrl.value;
+            }
+            out << "\n";
+        }
+        qctrl.id |= V4L2_CTRL_FLAG_NEXT_CTRL;
+    }
+    return out.str();
+}
+
+// Scan /dev/video* for V4L2 devices, return formatted string.
+static std::string scan_devices() {
+    std::ostringstream out;
+    DIR* dir = ::opendir("/dev");
+    if (!dir) return "Cannot open /dev\n";
+
+    struct dirent* entry;
+    while ((entry = ::readdir(dir)) != nullptr) {
+        std::string name(entry->d_name);
+        if (name.rfind("video", 0) != 0) continue;
+        std::string path = "/dev/" + name;
+        int fd = ::open(path.c_str(), O_RDWR | O_NONBLOCK);
+        if (fd < 0) continue;
+        struct v4l2_capability cap{};
+        if (::ioctl(fd, VIDIOC_QUERYCAP, &cap) == 0) {
+            out << path << " : "
+                << reinterpret_cast<const char*>(cap.card)
+                << " (" << reinterpret_cast<const char*>(cap.driver) << ")\n";
+        }
+        ::close(fd);
+    }
+    ::closedir(dir);
+    return out.str();
+}
+
 PYBIND11_MODULE(_bcc950_native, m) {
     m.doc() = "BCC950 native C++ bindings";
 
     // V4L2Device
     py::class_<bcc950::V4L2Device>(m, "V4L2Device")
         .def(py::init<>())
+        .def(py::init<const std::string&>(), py::arg("device"))
         .def("open", &bcc950::V4L2Device::open)
         .def("close", &bcc950::V4L2Device::close)
         .def("is_open", &bcc950::V4L2Device::is_open)
-        .def("set_control", &bcc950::V4L2Device::set_control)
-        .def("get_control", &bcc950::V4L2Device::get_control);
+        // Numeric overloads (direct V4L2 CID)
+        .def("set_control",
+             static_cast<void (bcc950::V4L2Device::*)(uint32_t, int32_t)>(
+                 &bcc950::V4L2Device::set_control),
+             py::arg("control_id"), py::arg("value"))
+        // String overloads (look up in CONTROL_MAP)
+        .def("set_control",
+             [](bcc950::V4L2Device& self, const std::string& name, int32_t value) {
+                 self.set_control(resolve_control(name), value);
+             },
+             py::arg("control"), py::arg("value"))
+        .def("get_control",
+             static_cast<int32_t (bcc950::V4L2Device::*)(uint32_t)>(
+                 &bcc950::V4L2Device::get_control),
+             py::arg("control_id"))
+        .def("get_control",
+             [](bcc950::V4L2Device& self, const std::string& name) -> int32_t {
+                 return self.get_control(resolve_control(name));
+             },
+             py::arg("control"))
+        .def("list_controls", &enumerate_controls);
+
+    // Module-level device scanner
+    m.def("list_devices", &scan_devices,
+          "Scan /dev/video* and return a formatted device list.");
 
     // PositionTracker
     py::class_<bcc950::PositionTracker>(m, "PositionTracker")

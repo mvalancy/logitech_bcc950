@@ -26,15 +26,17 @@ logitech_bcc950/
 │   │   ├── include/bcc950/     # Headers
 │   │   ├── src/                # Implementation
 │   │   └── tests/              # Google Test suite
-│   └── python/                 # Python package
-│       ├── bcc950/             # Library modules
-│       └── tests/              # pytest suite (unit/integration/vision)
+│   ├── python/                 # Python package
+│   │   ├── bcc950/             # Library modules
+│   │   └── tests/              # pytest suite (unit/integration/vision)
+│   └── bindings/               # pybind11 native backend (55x faster)
 ├── demos/
-│   ├── vision/                 # OpenCV-based demos
+│   ├── basic_embodied.py       # Simple see/hear/think/speak AI demo
+│   ├── vision/                 # OpenCV-based demos (tracker, calibration)
 │   └── voice/                  # Whisper STT / Piper TTS demos
-├── scripts/                    # Original bash script
+├── samples/                    # Quick-start scripts (PTZ, video stream)
+├── scripts/                    # Setup scripts, hardware verify
 ├── docs/                       # Architecture, vision testing, future plans
-├── bcc950_control.py           # Legacy entrypoint (backward-compat wrapper)
 └── CMakeLists.txt              # Top-level build (C++ + optional pybind11)
 ```
 
@@ -196,19 +198,18 @@ See [docs/vision_testing.md](docs/vision_testing.md) for details.
 
 ## Demos
 
-### Embodied AI (Amy)
+### Basic Embodied AI
 
-Full conversational AI that sees, hears, speaks, and moves the camera:
+A simple see/hear/think/speak loop — BCC950 camera + YOLO tracking + Whisper STT + Piper TTS:
 
 ```bash
 source .venv/bin/activate
-
-# Talk to Amy (requires Ollama + Whisper + Piper)
-python demos/embodied/conversation.py
-
-# Lightweight mode
-python demos/embodied/conversation.py --model gemma3:4b --whisper-model base --no-tts
+python demos/basic_embodied.py
+python demos/basic_embodied.py --no-tts --no-tracking --whisper-model base
 ```
+
+For the **full AI Commander** (autonomous consciousness with sensorium, thinking thread,
+persistent memory, and multi-sensor fusion), see [TRITIUM-SC](https://github.com/mvalancy/tritium-sc).
 
 ### Vision Demos
 
@@ -241,24 +242,6 @@ python demos/voice/narrator.py
 ```
 
 See [demos/README.md](demos/README.md) for detailed setup and [docs/usage_scenarios.md](docs/usage_scenarios.md) for comprehensive guides.
-
-## Embodied AI Architecture
-
-```mermaid
-flowchart TD
-    A[Whisper STT<br>large-v3] --> C[Ollama Agent<br>qwen3-vl:32b]
-    B[OpenCV<br>Frame Capture] --> C
-    C --> D[Piper TTS<br>Amy Voice]
-    C --> E[Tool Dispatch]
-    E --> F[BCC950Controller]
-    F --> G[V4L2 Interface]
-    G --> H[BCC950 Camera]
-    I[Human] --> A
-    D --> I
-    H -->|sees| B
-```
-
-See [docs/lua_llm_integration.md](docs/lua_llm_integration.md) for the LLM tool-use schema.
 
 ## Documentation
 

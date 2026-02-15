@@ -214,6 +214,7 @@ class FrameBuffer:
         self._frame: np.ndarray | None = None
         self._jpeg: bytes | None = None
         self._frame_time: float = 0.0
+        self._frame_id: int = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -238,6 +239,12 @@ class FrameBuffer:
             return self._jpeg
 
     @property
+    def frame_id(self) -> int:
+        """Monotonic counter incremented on each new frame."""
+        with self._lock:
+            return self._frame_id
+
+    @property
     def frame_age(self) -> float:
         """Seconds since the last frame was captured."""
         with self._lock:
@@ -258,6 +265,7 @@ class FrameBuffer:
                         self._frame = frame
                         self._jpeg = buf.tobytes()
                         self._frame_time = time.monotonic()
+                        self._frame_id += 1
             time.sleep(0.033)  # ~30 fps
 
 
@@ -307,15 +315,24 @@ class VisionThread:
         self._target_lock = threading.Lock()
 
         # Load model eagerly in main thread.
-        # Use ONNX format to avoid torch conflicts with Whisper.
+        # Prefer TensorRT engine > PyTorch GPU > ONNX CPU (fallback).
         from ultralytics import YOLO
+        import torch
+        engine_path = model_name.replace(".pt", ".engine")
         onnx_path = model_name.replace(".pt", ".onnx")
-        if os.path.exists(onnx_path):
+        if os.path.exists(engine_path):
+            self._model = YOLO(engine_path, task="detect")
+            self._yolo_backend = "TensorRT"
+        elif torch.cuda.is_available():
+            self._model = YOLO(model_name)
+            self._yolo_backend = "PyTorch CUDA"
+        elif os.path.exists(onnx_path):
             self._model = YOLO(onnx_path, task="detect")
+            self._yolo_backend = "ONNX CPU"
         else:
             self._model = YOLO(model_name)
-        # Warmup inference on a blank frame
-        self._model(np.zeros((480, 640, 3), dtype=np.uint8), verbose=False)
+            self._yolo_backend = "PyTorch CPU"
+        self._warmed_up = False
 
     @property
     def scene_summary(self) -> str:
@@ -343,6 +360,13 @@ class VisionThread:
         self._thread.join(timeout=5)
 
     def _run(self) -> None:
+        # Deferred warmup — runs on background thread instead of blocking boot
+        if not self._warmed_up:
+            t0 = time.monotonic()
+            self._model(np.zeros((480, 640, 3), dtype=np.uint8), verbose=False)
+            dt = time.monotonic() - t0
+            self._warmed_up = True
+            print(f"        YOLO warmup: done ({dt:.1f}s, {self._yolo_backend})")
         while not self._stop.is_set():
             frame = self._grab_frame()
             if frame is not None:
@@ -500,9 +524,20 @@ class Creature:
         self._auto_chat = False  # auto-conversation mode for testing
         self._auto_chat_stop = threading.Event()
 
-        # --- [1/7] Camera + PTZ ---
-        print("  [1/7] Camera + PTZ control")
-        self.controller = BCC950Controller(device=device)
+        # --- [1/9] Camera + PTZ ---
+        print("  [1/9] Camera + PTZ control")
+        try:
+            from bcc950.native_backend import NativeV4L2Backend, is_available
+            if is_available():
+                backend = NativeV4L2Backend()
+                self.controller = BCC950Controller(device=device, backend=backend)
+                print("        Backend: native (C++)")
+            else:
+                self.controller = BCC950Controller(device=device)
+                print("        Backend: subprocess (v4l2-ctl)")
+        except ImportError:
+            self.controller = BCC950Controller(device=device)
+            print("        Backend: subprocess (v4l2-ctl)")
         if device is None:
             found = self.controller.find_camera()
             if found:
@@ -547,8 +582,8 @@ class Creature:
         else:
             self.dashboard = None
 
-        # --- [2/7] Speech-to-text (load first, warm up before YOLO) ---
-        print(f"  [2/7] Speech-to-text")
+        # --- [2/9] Speech-to-text (load first, warm up before YOLO) ---
+        print(f"  [2/9] Speech-to-text")
         from .listener import Listener
         self.listener = Listener(model_name=whisper_model, audio_device=audio_device)
         # Warm up Whisper with a silent buffer so first real transcription
@@ -562,29 +597,45 @@ class Creature:
         print(f"        Wake word: {ww_label}")
         print(f"        Warmup: done")
 
-        # --- [3/7] YOLO object detection (loaded after Whisper warmup) ---
-        print("  [3/7] YOLO object detection")
+        # --- [3/9] YOLO object detection (loaded after Whisper warmup) ---
+        print("  [3/9] YOLO object detection")
         self.vision_thread = VisionThread(
             self._frame_buffer, self.event_bus,
             event_queue=self._event_queue,
         )
-        print("        Model: yolo11n (ONNX)")
+        print(f"        Model: yolo11n ({self.vision_thread._yolo_backend})")
         print("        Role: continuous scene scanning (~3 fps)")
         print("        Tracks: people, animals, objects")
 
-        # --- [4/7] Text-to-speech ---
-        print("  [4/7] Text-to-speech")
+        # --- [4/9] Text-to-speech + pre-cached acknowledgments ---
+        print("  [4/9] Text-to-speech")
         from .speaker import Speaker
         self.speaker = Speaker()
         self.use_tts = use_tts and self.speaker.available
+        self._ack_wavs: list[bytes] = []
         if self.use_tts:
             print("        Engine: Piper TTS")
             print("        Voice: Amy (en_US)")
+            # Pre-cache wake word acknowledgments for instant response
+            ack_phrases = ["Yes?", "Hmm?", "I'm here!", "What's up?"]
+            for phrase in ack_phrases:
+                wav = self.speaker.synthesize_raw(phrase)
+                if wav:
+                    self._ack_wavs.append(wav)
+            if self._ack_wavs:
+                print(f"        Pre-cached {len(self._ack_wavs)} acknowledgments")
         else:
             print("        TTS: disabled (text-only mode)")
 
-        # --- [5/7] Chat model (fast, text-only) ---
-        print(f"  [5/7] Chat model (fast)")
+        # --- [5/9] Sensorium (sensor fusion) ---
+        print("  [5/9] Sensorium (sensor fusion)")
+        from .sensorium import Sensorium
+        self.sensorium = Sensorium()
+        print("        Role: temporal awareness, scene narrative")
+        print("        Window: 120s sliding window, 30 events max")
+
+        # --- [6/9] Chat model (fast, text-only) ---
+        print(f"  [6/9] Chat model (fast)")
         from .agent import Agent, CREATURE_SYSTEM_PROMPT
         self.chat_agent = Agent(
             controller=self.controller,
@@ -596,8 +647,8 @@ class Creature:
         print(f"        Role: conversation, tool use")
         print(f"        Context: YOLO detections + deep observations")
 
-        # --- [6/7] Deep vision model (background) ---
-        print(f"  [6/7] Deep vision model (async)")
+        # --- [7/9] Deep vision model (background) ---
+        print(f"  [7/9] Deep vision model (async)")
         self.deep_model = model
         self._deep_observation: str = ""
         self._deep_lock = threading.Lock()
@@ -605,8 +656,16 @@ class Creature:
         print(f"        Role: scene understanding (background)")
         print(f"        Runs on: curiosity ticks, clear frames only")
 
-        # --- [7/7] Threads ---
-        print("  [7/7] Starting subsystem threads")
+        # --- [8/9] Thinking thread (continuous) ---
+        print(f"  [8/9] Thinking thread (continuous)")
+        from .thinking import ThinkingThread
+        self.thinking = ThinkingThread(self, model=chat_model)
+        print(f"        Model: {chat_model} (Ollama)")
+        print(f"        Role: inner monologue, Lua-structured decisions")
+        print(f"        Interval: {self.thinking._interval}s between thoughts")
+
+        # --- [9/9] Threads ---
+        print("  [9/9] Starting subsystem threads")
         self.audio_thread = AudioThread(self.listener, self._event_queue)
         self.curiosity_timer = CuriosityTimer(
             self._event_queue, min_interval=45.0, max_interval=90.0,
@@ -632,10 +691,17 @@ class Creature:
     def grab_mjpeg_frame(self) -> bytes | None:
         """Grab a JPEG frame for the MJPEG stream (never blocks).
 
-        Reads the latest frame from FrameBuffer, draws YOLO bounding
-        boxes on it, and encodes as JPEG.  Falls back to the cached
-        last frame if FrameBuffer has nothing yet.
+        Fast path: if no YOLO detections, return the pre-encoded JPEG
+        from FrameBuffer (zero extra encode cost — ~80% of frames).
+        Slow path: draw YOLO boxes, encode once.
         """
+        if not hasattr(self, "vision_thread") or not self.vision_thread.latest_detections:
+            # Fast path: no overlay needed, use pre-encoded JPEG
+            jpeg = self._frame_buffer.jpeg
+            if jpeg is not None:
+                self._last_frame = jpeg
+            return self._last_frame
+        # Slow path: draw YOLO boxes, encode once
         frame = self._frame_buffer.frame
         if frame is not None:
             frame = self._draw_yolo_overlay(frame)
@@ -777,6 +843,12 @@ class Creature:
         # Memory data
         mem_data = self.memory.get_dashboard_data()
 
+        # Sensorium data
+        sensorium_narrative = self.sensorium.narrative() if hasattr(self, "sensorium") else ""
+        sensorium_summary = self.sensorium.summary() if hasattr(self, "sensorium") else ""
+        sensorium_mood = self.sensorium.mood if hasattr(self, "sensorium") else "neutral"
+        thinking_suppressed = self.thinking.suppressed if hasattr(self, "thinking") else False
+
         self.event_bus.publish("context_update", {
             "scene": scene,
             "deep_observation": deep_obs,
@@ -786,6 +858,10 @@ class Creature:
             "history_preview": history_preview,
             "memory": mem_data,
             "auto_chat": self._auto_chat,
+            "sensorium_narrative": sensorium_narrative,
+            "sensorium_summary": sensorium_summary,
+            "mood": sensorium_mood,
+            "thinking_suppressed": thinking_suppressed,
         })
 
         # Periodic memory save
@@ -841,6 +917,10 @@ class Creature:
         self.vision_thread.start()
         print("  YOLO detection: running")
 
+        # Start thinking thread after YOLO so sensorium has data
+        self.thinking.start()
+        print("  Thinking thread: running")
+
         # Resume scanning after greeting
         self.motor.set_program(self._default_motor())
 
@@ -866,6 +946,7 @@ class Creature:
                     transcript = event.data
                     print(f'  You: "{transcript}"')
                     self.event_bus.publish("transcript", {"speaker": "user", "text": transcript})
+                    self.sensorium.push("audio", f'User said: "{transcript[:60]}"', importance=0.8)
                     listening_since = None
 
                     # Check for exit commands
@@ -882,7 +963,31 @@ class Creature:
                         self._set_state(CreatureState.IDLE)
                         continue
 
-                    # Capture frame + think + speak
+                    # === WAKE WORD REFLEX (L2 Instinct — zero LLM) ===
+
+                    # INSTANT: play pre-cached acknowledgment (sub-100ms)
+                    if self._ack_wavs:
+                        wav = random.choice(self._ack_wavs)
+                        self.audio_thread.disable()
+                        self.speaker.play_raw(wav, rate=self.speaker.sample_rate)
+                        self.audio_thread.enable()
+
+                    # REFLEX: find the speaker
+                    target = self.vision_thread.person_target
+                    if target is None:
+                        # Can't see anyone — search
+                        from .motor import search_scan
+                        self.motor.set_program(search_scan(self.controller))
+                        # Wait briefly for YOLO to find someone
+                        for _ in range(10):  # ~3 seconds at 0.3s per check
+                            time.sleep(0.3)
+                            target = self.vision_thread.person_target
+                            if target is not None:
+                                break
+                        if target is None:
+                            self.say("Who's there? I can hear you but I can't see you.")
+
+                    # RESPOND: fast LLM with sensorium context
                     self._respond(transcript=query)
                     self._awake = False
 
@@ -892,6 +997,7 @@ class Creature:
                     self._publish_position()
 
                 elif event.type == EventType.SILENCE:
+                    self.sensorium.push("audio", "Silence")
                     # If we were listening and it's been quiet, go back to scanning
                     if listening_since and (time.monotonic() - listening_since) > 4.0:
                         print("  [silence — resuming scan]")
@@ -904,6 +1010,7 @@ class Creature:
                     people = event.data
                     self._last_person_seen = time.monotonic()
                     # auto_track already centers on them
+                    self.sensorium.push("yolo", f"{people} person(s) appeared", importance=0.8)
                     self.memory.add_event("person_arrived", f"{people} person(s) detected")
                     # Greeting cooldown: don't re-greet within 60 seconds
                     now = time.monotonic()
@@ -927,6 +1034,7 @@ class Creature:
 
                 elif event.type == EventType.PERSON_LEFT:
                     print("  [YOLO: everyone left]")
+                    self.sensorium.push("yolo", "Everyone left", importance=0.7)
                     # Don't reset _person_greeted immediately — the cooldown
                     # timer handles re-greeting appropriately.
                     self.memory.add_event("person_left", "Everyone left the scene")
@@ -946,6 +1054,8 @@ class Creature:
     def _respond(self, transcript: str) -> None:
         """Fast chat response — text-only model with YOLO + deep obs context."""
         self._set_state(CreatureState.THINKING)
+        # Suppress thinking thread during conversation
+        self.thinking.suppress(15)
         # auto_track keeps us centered on the person while thinking
 
         # Build scene context from YOLO + accumulated deep observations
@@ -956,6 +1066,11 @@ class Creature:
         scene_ctx = scene
         if deep_obs:
             scene_ctx += f"\n[Recent observation]: {deep_obs}"
+
+        # Add sensorium narrative for temporal context
+        narrative = self.sensorium.narrative()
+        if narrative and narrative != "No recent observations.":
+            scene_ctx += f"\n[Recent awareness]:\n{narrative}"
 
         # Add long-term memory context
         pos = self.controller.position
@@ -971,8 +1086,9 @@ class Creature:
             scene_context=scene_ctx,
         )
 
-        # Log conversation to memory
+        # Log conversation to memory and sensorium
         self.memory.add_event("conversation", f"User: {transcript} → Amy: {response[:80]}")
+        self.sensorium.push("audio", f'Amy said: "{response[:60]}"')
 
         # Publish context state to dashboard
         self._publish_context()
@@ -1061,6 +1177,7 @@ class Creature:
         if observation and observation.strip(".") != "":
             with self._deep_lock:
                 self._deep_observation = observation
+            self.sensorium.push("deep", observation[:100], importance=0.7)
             print(f'  [deep observation]: "{observation}"')
             self.event_bus.publish("event", {"text": f"[deep]: {observation}"})
 
@@ -1280,6 +1397,7 @@ class Creature:
         print("Shutting down...")
         self._running = False
         self._auto_chat_stop.set()
+        self.thinking.stop()
         self.memory.add_event("shutdown", "Amy shutting down")
         self.memory.save()
         print("  [memory saved]")

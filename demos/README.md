@@ -7,13 +7,8 @@ with computer vision, speech recognition, text-to-speech, and conversational AI.
 
 ```
 demos/
-  embodied/
-    conversation.py    - Full embodied AI: see, hear, speak, move
-    listener.py        - Whisper STT audio recording
-    speaker.py         - Piper TTS with queued playback
-    vision.py          - OpenCV frame capture + Ollama vision
-    agent.py           - Ollama agent with tool use
-    tools.py           - Tool dispatch to BCC950Controller
+  basic_embodied.py    - Simple see/hear/think/speak loop (~200 lines)
+  embodied/            - (Legacy) Full AI — now lives in tritium-sc
   vision/
     motion_tracker.py  - Auto-tracks moving objects via background subtraction
     movement_verifier.py - Interactive PTZ + optical flow verification tool
@@ -40,43 +35,43 @@ The fastest way to set everything up:
 source .venv/bin/activate
 ```
 
-## Embodied AI Demo (Amy)
+## Basic Embodied AI Demo
 
-**Amy is an AI embodied in the BCC950 camera.** She sees through the camera, hears
-via the microphone, speaks with Piper TTS, and moves the camera using PTZ controls.
+A simple ~200-line demo showing BCC950 camera + YOLO person tracking + Whisper STT
++ Piper TTS in a see/hear/think/speak loop.
+
+For the **full AI Commander** (sensorium, thinking thread, memory, autonomous behavior),
+see [TRITIUM-SC](https://github.com/scubasonar/tritium-sc).
 
 ### Prerequisites
 
 | Component | Purpose | Size |
 |-----------|---------|------|
-| Ollama + qwen3-vl:32b | Vision + language understanding | 21GB |
+| Ollama + llava:7b | Vision + language understanding | ~5GB |
 | Whisper large-v3 | Speech-to-text | ~3GB |
 | Piper + Amy voice | Text-to-speech | ~50MB |
 | OpenCV | Frame capture | ~50MB |
 | sounddevice | Audio I/O | ~1MB |
+| ultralytics | YOLO person tracking | ~50MB |
 
 ### Run
 
 ```bash
 # Full demo
-python demos/embodied/conversation.py
+python demos/basic_embodied.py
 
-# Lightweight (smaller models, no TTS)
-python demos/embodied/conversation.py --model gemma3:4b --whisper-model base --no-tts
-
-# Specify audio device
-python demos/embodied/conversation.py --audio-device 2
+# Lightweight (smaller models, no TTS, no tracking)
+python demos/basic_embodied.py --model gemma3:4b --whisper-model base --no-tts --no-tracking
 ```
 
 ### How It Works
 
-1. **Listen** - Records 4 seconds of audio from BCC950 mic
-2. **Transcribe** - Whisper converts speech to text
-3. **See** - Captures camera frame via OpenCV
-4. **Think** - Sends transcript + frame to Ollama (qwen3-vl:32b)
-5. **Act** - Executes any tool calls (pan, tilt, zoom)
-6. **Speak** - Piper TTS reads response aloud as Amy
-7. **Loop** - Back to step 1
+1. **See** - Captures frame from BCC950 camera
+2. **Track** - YOLO detects people, auto-pans/tilts to follow
+3. **Listen** - Records 4 seconds of audio from BCC950 mic
+4. **Think** - Sends transcript + frame to Ollama (llava:7b)
+5. **Speak** - Piper TTS reads response aloud
+6. **Loop** - Back to step 1
 
 ## Vision Demos
 

@@ -165,6 +165,7 @@ header h1 { font-size: 1rem; font-weight: 600; }
 .log .yolo { color: #d29922; }
 .log .friend { color: #f0883e; }
 .log .warn { color: #f85149; }
+.log .thought { color: #e3b341; font-style: italic; }
 
 /* Auto-chat button */
 .auto-btn {
@@ -203,6 +204,31 @@ header h1 { font-size: 1rem; font-weight: 600; }
     min-height: 2em;
 }
 
+/* Thought panel */
+#thought-panel {
+    margin-top: 4px;
+    padding: 4px 8px;
+    background: #161b22; border-radius: 3px;
+    font-size: 0.72rem; color: #e3b341;
+    max-height: 100px; overflow-y: auto;
+    font-style: italic;
+}
+#thought-panel .thought-entry {
+    padding: 1px 0; border-bottom: 1px solid #1c2128;
+}
+#thought-panel .thought-ts { color: #484f58; margin-right: 4px; font-size: 0.65rem; }
+
+/* Sensorium narrative */
+#sensorium-panel {
+    margin-top: 4px;
+    padding: 4px 8px;
+    background: #161b22; border-radius: 3px;
+    font-size: 0.68rem; color: #8b949e;
+    max-height: 100px; overflow-y: auto;
+    white-space: pre-line;
+    border: 1px solid #21262d;
+}
+
 /* Status bar */
 .status-bar {
     grid-column: 1 / -1;
@@ -238,6 +264,8 @@ header h1 { font-size: 1rem; font-weight: 600; }
         <span class="badge"><span class="dot" style="background:#d29922"></span>YOLO <span id="yolo-people">0</span>p</span>
         <span class="badge" id="deep-badge"><span class="dot" style="background:#484f58"></span>Deep</span>
         <span class="badge" id="tracking-badge"><span class="dot" style="background:#484f58"></span>Track</span>
+        <span class="badge" id="mood-badge"><span class="dot" style="background:#e3b341"></span>Mood: <span id="mood-label">neutral</span></span>
+        <span class="badge" id="thinking-badge"><span class="dot" id="thinking-dot" style="background:#484f58"></span>Think</span>
         <button class="auto-btn" id="auto-btn" onclick="toggleAutoChat()">Auto Chat</button>
     </div>
 </header>
@@ -256,6 +284,10 @@ header h1 { font-size: 1rem; font-weight: 600; }
         <div class="log" id="transcript" style="flex:1"></div>
         <h2 style="margin-top:8px">Deep Observation</h2>
         <div id="deep-obs">Waiting for first deep think...</div>
+        <h2 style="margin-top:8px">Inner Thoughts</h2>
+        <div id="thought-panel">Waiting for first thought...</div>
+        <h2 style="margin-top:8px">Sensorium</h2>
+        <div id="sensorium-panel">Waiting for awareness data...</div>
         <h2 style="margin-top:8px">Amy's Mind</h2>
         <div id="context-panel">
             <div class="ctx-label">Scene (YOLO)</div>
@@ -392,6 +424,25 @@ function toggleAutoChat() {
     });
 }
 
+var MOOD_COLORS = {
+    neutral:'#8b949e', engaged:'#58a6ff', attentive:'#d29922',
+    contemplative:'#e3b341', calm:'#3fb950', curious:'#d2a8ff'
+};
+
+function addThought(text) {
+    var panel = document.getElementById('thought-panel');
+    if (panel.textContent === 'Waiting for first thought...') panel.innerHTML = '';
+    var div = document.createElement('div');
+    div.className = 'thought-entry';
+    div.innerHTML = '<span class="thought-ts">' + ts() + '</span>' + esc(text);
+    panel.appendChild(div);
+    panel.scrollTop = panel.scrollHeight;
+    while (panel.children.length > 20) panel.removeChild(panel.firstChild);
+    // Pulse the thinking badge
+    document.getElementById('thinking-dot').style.background = '#e3b341';
+    setTimeout(function() { document.getElementById('thinking-dot').style.background = '#484f58'; }, 2000);
+}
+
 function updateContext(d) {
     document.getElementById('ctx-scene').textContent = d.scene || '--';
     document.getElementById('ctx-deep').textContent = d.deep_observation || '--';
@@ -410,6 +461,20 @@ function updateContext(d) {
     } else {
         dot.style.background = '#484f58';
         info.textContent = 'Tracking: none';
+    }
+    // Mood indicator
+    if (d.mood) {
+        document.getElementById('mood-label').textContent = d.mood;
+        var moodDot = document.getElementById('mood-badge').querySelector('.dot');
+        moodDot.style.background = MOOD_COLORS[d.mood] || '#8b949e';
+    }
+    // Thinking suppression indicator
+    if (d.thinking_suppressed) {
+        document.getElementById('thinking-dot').style.background = '#f85149';
+    }
+    // Sensorium narrative
+    if (d.sensorium_narrative) {
+        document.getElementById('sensorium-panel').textContent = d.sensorium_narrative;
     }
     // Chat history preview
     var hist = document.getElementById('ctx-history');
@@ -477,6 +542,10 @@ function connectSSE() {
                     document.getElementById('deep-obs').textContent = d.text.substring(8);
                     document.getElementById('deep-badge').querySelector('.dot').style.background = '#3fb950';
                 }
+                break;
+            case 'thought':
+                addThought(d.text);
+                addLog('syslog', 'thought', '[think]: ' + esc(d.text));
                 break;
             case 'detections':
                 updateDetections(d); break;
@@ -546,22 +615,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         creature: Creature = self.server.creature  # type: ignore[attr-defined]
-        last_sent: bytes | None = None
+        last_frame_id: int = -1
         try:
             while True:
-                frame = creature.grab_mjpeg_frame()
-                # Only send if we have a new frame (avoid resending identical data)
-                if frame is not None and frame is not last_sent:
-                    self.wfile.write(b"--frame\r\n")
-                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                    self.wfile.write(
-                        f"Content-Length: {len(frame)}\r\n\r\n".encode()
-                    )
-                    self.wfile.write(frame)
-                    self.wfile.write(b"\r\n")
-                    self.wfile.flush()
-                    last_sent = frame
-                time.sleep(0.066)  # ~15 fps
+                cur_id = creature._frame_buffer.frame_id
+                if cur_id != last_frame_id:
+                    frame = creature.grab_mjpeg_frame()
+                    if frame is not None:
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(
+                            f"Content-Length: {len(frame)}\r\n\r\n".encode()
+                        )
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                        last_frame_id = cur_id
+                time.sleep(0.033)  # ~30 fps
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
