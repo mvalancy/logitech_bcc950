@@ -1,10 +1,18 @@
 """Fixtures for vision-based camera verification tests."""
 
 import pytest
-import cv2
 
-from bcc950.controller import BCC950Controller
-from bcc950.v4l2_backend import SubprocessV4L2Backend
+# OpenCV is the optional `vision` extra. conftest is imported during
+# collection, which happens BEFORE the `-m 'not vision'` in addopts can
+# deselect anything — so importing cv2 directly here turned "these tests are
+# deselected" into "collection failed" on any machine without the extra.
+# importorskip skips this directory cleanly instead.
+cv2 = pytest.importorskip(
+    "cv2", reason="vision tests need the optional 'vision' extra (opencv-python)"
+)
+
+from bcc950.controller import BCC950Controller  # noqa: E402
+from bcc950.v4l2_backend import SubprocessV4L2Backend  # noqa: E402
 
 WARMUP_FRAMES = 10
 

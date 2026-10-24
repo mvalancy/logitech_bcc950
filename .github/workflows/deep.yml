@@ -1,0 +1,59 @@
+# Deep lane: dev -> main. Python both ways plus the C++ suite.
+name: deep
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python (with and without the vision extra)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Without vision extra
+        working-directory: src/python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+          python -c "import bcc950; print('import without cv2 OK')"
+          python -m pytest tests -q
+
+      - name: With vision extra
+        # The public API must resolve identically either way; MotionVerifier is
+        # exposed lazily via module __getattr__.
+        working-directory: src/python
+        run: |
+          pip install -e '.[test,vision]'
+          python -c "from bcc950 import MotionVerifier; print('lazy export OK:', MotionVerifier.__name__)"
+          python -m pytest tests -q
+
+  cpp:
+    name: c++ tests (mock v4l2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: ctest
+        # src/cpp/tests/mock_v4l2_device.hpp stands in for the camera, so this
+        # needs no hardware.
+        working-directory: build
+        run: ctest --output-on-failure
