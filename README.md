@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/hero/logitech_bcc950-dark.svg">
+  <img src="docs/img/hero/logitech_bcc950-light.svg" width="100%" alt="Logitech BCC950: the camera drawn as a talking eyeball on a stick that pans, tilts, zooms its pupil across the camera's 100 to 500 range and blinks">
+</picture>
+
 # Logitech BCC950 Camera Control
 
 ![Logitech BCC950 Camera](https://github.com/user-attachments/assets/71319eb9-181c-4821-8d78-f85fe8dfcd5d)
